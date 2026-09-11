@@ -8,7 +8,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/
 
 const manifest = {
   id: 'com.naevistv.alooytv',
-  version: '1.0.0',
+  version: '1.0.1',
   name: 'AlooyTV',
   description: 'Search AlooyTV directly and provide its episodes/streams.',
   resources: [
@@ -88,6 +88,65 @@ function linksFrom(html, base) {
   return out;
 }
 
+function imageFromHtml(html, baseUrl) {
+  const candidates = [];
+  const add = (value) => {
+    if (!value) return;
+    const v = abs(decodeHtml(value.trim()), baseUrl);
+    if (v && /^https?:\/\//i.test(v)) candidates.push(v);
+  };
+
+  // Open Graph image is usually the best poster on WordPress sites.
+  let m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  if (m) add(m[1]);
+  if (!candidates.length) {
+    m = html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+    if (m) add(m[1]);
+  }
+
+  // Twitter image fallback.
+  if (!candidates.length) {
+    m = html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
+    if (m) add(m[1]);
+  }
+  if (!candidates.length) {
+    m = html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
+    if (m) add(m[1]);
+  }
+
+  // JSON-LD image fallback.
+  if (!candidates.length) {
+    const jsonImage = html.match(/"image"\s*:\s*(?:\[\s*)?["']([^"']+)["']/i);
+    if (jsonImage) add(jsonImage[1]);
+  }
+
+  // WordPress featured-image / thumbnail fallbacks.
+  if (!candidates.length) {
+    const imgRe = /<img\b[^>]*(?:class=["'][^"']*(?:wp-post-image|post-thumbnail|attachment-post-thumbnail|thumbnail)[^"']*["'])[^>]*>/gi;
+    let im;
+    while ((im = imgRe.exec(html)) && !candidates.length) {
+      const tag = im[0];
+      const src = tag.match(/(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i);
+      if (src) add(src[1]);
+    }
+  }
+
+  // Last-resort image: first reasonably-sized-looking image URL in the page.
+  if (!candidates.length) {
+    const imgRe = /<img\b[^>]*(?:data-src|data-lazy-src|src)=["']([^"']+)["'][^>]*>/gi;
+    let im;
+    while ((im = imgRe.exec(html))) {
+      const u = abs(decodeHtml(im[1]), baseUrl);
+      if (u && /^https?:\/\//i.test(u) && !/logo|avatar|icon|emoji|favicon/i.test(u)) {
+        candidates.push(u);
+        break;
+      }
+    }
+  }
+
+  return candidates[0] || undefined;
+}
+
 function titleFromHtml(html) {
   let m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i);
   if (!m) m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -156,7 +215,7 @@ builder.defineCatalogHandler(async ({ extra }) => {
         id: idFor(r.href),
         type: 'series',
         name: title || strip(r.text) || q,
-        poster: undefined,
+        poster: page ? imageFromHtml(page.html, r.href) : undefined,
         description: 'AlooyTV',
         videos: eps.slice(0, 200).map(e => ({
           id: idFor(e.href),
@@ -178,12 +237,15 @@ builder.defineMetaHandler(async ({ id }) => {
     const pageUrl = urlFromId(id);
     const { html } = await request(pageUrl);
     const title = titleFromHtml(html);
+    const poster = imageFromHtml(html, pageUrl);
     const eps = findEpisodeLinks(html, pageUrl);
     return {
       meta: {
         id,
         type: 'series',
         name: title,
+        poster,
+        background: poster,
         videos: eps.map(e => ({
           id: idFor(e.href),
           title: e.text || `Episode ${e.episode}`,
