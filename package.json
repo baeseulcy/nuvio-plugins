@@ -1,0 +1,7 @@
+{
+  "name": "alooytv-nuvio-addon",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "stremio-addon-sdk": "^1.6.10" }
+}
